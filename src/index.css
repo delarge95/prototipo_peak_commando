@@ -1,1 +1,233 @@
 @import "tailwindcss";
+
+:root {
+  --pc-bg: #0a0f0b;
+  --pc-panel: rgba(13, 20, 14, 0.88);
+  --pc-line: #31412f;
+  --pc-khaki: #c9c09a;
+  --pc-khaki-dim: #8a8468;
+  --pc-amber: #ffb02e;
+  --pc-amber-hot: #ff8a00;
+  --pc-cyan: #38e1ff;
+  --pc-red: #ff4438;
+  --pc-blue: #4d8dff;
+  --pc-purple: #b45cff;
+  --pc-green: #6fae4e;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  background: var(--pc-bg);
+  color: var(--pc-khaki);
+  font-family: "Chakra Petch", "Trebuchet MS", sans-serif;
+  overflow: hidden;
+}
+
+.font-display {
+  font-family: "Black Ops One", "Chakra Petch", sans-serif;
+  letter-spacing: 0.04em;
+}
+
+.chamfer {
+  clip-path: polygon(
+    14px 0,
+    100% 0,
+    100% calc(100% - 14px),
+    calc(100% - 14px) 100%,
+    0 100%,
+    0 14px
+  );
+}
+.chamfer-sm {
+  clip-path: polygon(
+    8px 0,
+    100% 0,
+    100% calc(100% - 8px),
+    calc(100% - 8px) 100%,
+    0 100%,
+    0 8px
+  );
+}
+
+.scanlines::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: repeating-linear-gradient(
+    0deg,
+    rgba(0, 0, 0, 0.16) 0px,
+    rgba(0, 0, 0, 0.16) 1px,
+    transparent 1px,
+    transparent 3px
+  );
+  mix-blend-mode: multiply;
+  z-index: 5;
+}
+
+.tactical-bg {
+  background:
+    radial-gradient(1200px 700px at 75% -10%, rgba(56, 225, 255, 0.07), transparent 60%),
+    radial-gradient(900px 600px at 8% 110%, rgba(255, 176, 46, 0.08), transparent 55%),
+    repeating-linear-gradient(0deg, rgba(201, 192, 154, 0.035) 0 1px, transparent 1px 48px),
+    repeating-linear-gradient(90deg, rgba(201, 192, 154, 0.035) 0 1px, transparent 1px 48px),
+    var(--pc-bg);
+}
+
+.hazard {
+  background: repeating-linear-gradient(
+    -45deg,
+    #ffb02e 0 14px,
+    #17130a 14px 28px
+  );
+}
+
+.keycap {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.9rem;
+  height: 1.9rem;
+  padding: 0 0.45rem;
+  border: 1px solid var(--pc-line);
+  border-bottom-width: 3px;
+  background: #141c13;
+  color: var(--pc-khaki);
+  font-weight: 700;
+  font-size: 0.72rem;
+  letter-spacing: 0.06em;
+  border-radius: 4px;
+  box-shadow: 0 2px 0 rgba(0, 0, 0, 0.5);
+}
+
+.btn-commando {
+  position: relative;
+  font-family: "Black Ops One", sans-serif;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  background: var(--pc-amber);
+  color: #17130a;
+  transform: skewX(-8deg);
+  transition: transform 0.12s ease, box-shadow 0.12s ease, background 0.12s ease;
+  box-shadow: 0 6px 0 #7a5210, 0 10px 24px rgba(0, 0, 0, 0.55);
+  cursor: pointer;
+}
+.btn-commando:hover {
+  transform: skewX(-8deg) translateY(-2px);
+  background: var(--pc-amber-hot);
+  box-shadow: 0 8px 0 #7a5210, 0 16px 30px rgba(0, 0, 0, 0.6);
+}
+.btn-commando:active {
+  transform: skewX(-8deg) translateY(3px);
+  box-shadow: 0 2px 0 #7a5210;
+}
+.btn-commando > span {
+  display: inline-block;
+  transform: skewX(8deg);
+}
+.btn-ghost {
+  font-family: "Black Ops One", sans-serif;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--pc-khaki);
+  border: 1px solid var(--pc-line);
+  background: rgba(20, 28, 19, 0.7);
+  transform: skewX(-8deg);
+  transition: all 0.12s ease;
+  cursor: pointer;
+}
+.btn-ghost:hover {
+  color: #17130a;
+  background: var(--pc-khaki);
+  border-color: var(--pc-khaki);
+}
+.btn-ghost > span {
+  display: inline-block;
+  transform: skewX(8deg);
+}
+
+.title-block {
+  color: var(--pc-amber);
+  text-shadow:
+    3px 3px 0 #17130a,
+    6px 6px 0 rgba(56, 225, 255, 0.28),
+    0 0 42px rgba(255, 176, 46, 0.25);
+}
+
+@keyframes dmg-flash {
+  0% { opacity: 0.85; }
+  100% { opacity: 0; }
+}
+.anim-dmg {
+  animation: dmg-flash 0.4s ease-out forwards;
+}
+
+@keyframes feed-in {
+  0% { opacity: 0; transform: translateX(-16px); }
+  100% { opacity: 1; transform: translateX(0); }
+}
+.anim-feed {
+  animation: feed-in 0.18s ease-out;
+}
+
+@keyframes pulse-red {
+  0%, 100% { color: var(--pc-red); text-shadow: 0 0 18px rgba(255, 68, 56, 0.7); }
+  50% { color: #ffd7d3; text-shadow: 0 0 30px rgba(255, 68, 56, 1); }
+}
+.anim-timer-crit {
+  animation: pulse-red 0.6s infinite;
+}
+
+@keyframes blink-soft {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+.anim-blink {
+  animation: blink-soft 1.1s infinite;
+}
+
+@keyframes era-card-in {
+  0% { opacity: 0; transform: scale(1.18); letter-spacing: 0.6em; }
+  60% { opacity: 1; }
+  100% { opacity: 1; transform: scale(1); }
+}
+.anim-era-card {
+  animation: era-card-in 0.7s cubic-bezier(0.2, 0.9, 0.3, 1) both;
+}
+
+@keyframes floaty {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-6px); }
+}
+.anim-floaty {
+  animation: floaty 3s ease-in-out infinite;
+}
+
+@keyframes stamp-in {
+  0% { opacity: 0; transform: scale(1.6) rotate(-14deg); }
+  100% { opacity: 1; transform: scale(1) rotate(-8deg); }
+}
+.anim-stamp {
+  animation: stamp-in 0.35s cubic-bezier(0.2, 1.4, 0.4, 1) both;
+}
+
+.doc-scroll::-webkit-scrollbar {
+  width: 10px;
+}
+.doc-scroll::-webkit-scrollbar-track {
+  background: #0d140e;
+}
+.doc-scroll::-webkit-scrollbar-thumb {
+  background: #31412f;
+  border: 2px solid #0d140e;
+}
+.doc-scroll::-webkit-scrollbar-thumb:hover {
+  background: var(--pc-amber);
+}
+
+.crosshair {
+  filter: drop-shadow(0 0 4px rgba(0, 0, 0, 0.8));
+}
