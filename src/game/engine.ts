@@ -80,9 +80,9 @@ type Stink = { mesh: THREE.Mesh; cloud: THREE.Mesh | null; pos: THREE.Vector3; v
 type Particle = { mesh: THREE.Mesh; vel: THREE.Vector3; life: number; maxLife: number };
 
 const CELL = 2;
-const N = 33;
-const ORIGIN = -32;
-const ISLAND_R = 29;
+const N = 65;
+const ORIGIN = -64;
+const ISLAND_R = 62;
 const G = 23;
 const JUMP_V = 8.7;
 const STEP_UP = 0.95;
@@ -120,6 +120,7 @@ export class PeakCommandoGame {
 
   private keys = new Set<string>();
   private interactPressed = false;
+  private pointerLockBroken = false;
 
   // --- run state ---
   private phase: Phase = "menu";
@@ -209,7 +210,7 @@ export class PeakCommandoGame {
     this.cb = cb;
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: "high-performance" });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.75));
-    this.camera = new THREE.PerspectiveCamera(75, 1, 0.1, 300);
+    this.camera = new THREE.PerspectiveCamera(75, 1, 0.1, 700);
     this.camera.rotation.order = "YXZ";
     this.scene.add(this.camera);
     this.camera.add(this.weaponGroup);
@@ -229,6 +230,7 @@ export class PeakCommandoGame {
     window.addEventListener("mousemove", this.onMouseMove);
     window.addEventListener("resize", this.onResize);
     document.addEventListener("pointerlockchange", this.onLockChange);
+    document.addEventListener("pointerlockerror", this.onLockError);
     document.addEventListener("mousedown", this.onMouseDown);
     this.onResize();
     this.pushHud();
@@ -243,6 +245,7 @@ export class PeakCommandoGame {
     window.removeEventListener("mousemove", this.onMouseMove);
     window.removeEventListener("resize", this.onResize);
     document.removeEventListener("pointerlockchange", this.onLockChange);
+    document.removeEventListener("pointerlockerror", this.onLockError);
     document.removeEventListener("mousedown", this.onMouseDown);
     this.renderer.dispose();
   }
@@ -260,7 +263,7 @@ export class PeakCommandoGame {
     this.eraIdx = 0;
     this.buildIsland(0);
     this.phase = "playing";
-    this.canvas.requestPointerLock();
+    this.lockPointer();
     this.feed("OPERACIÓN CRONOS: reúne fragmentos azules, descarga tiempo y tumba al jefe.", "info");
     this.pushHud();
   }
@@ -276,7 +279,7 @@ export class PeakCommandoGame {
     if (this.phase !== "paused") return;
     sfx.unlock();
     this.phase = "playing";
-    this.canvas.requestPointerLock();
+    this.lockPointer();
     this.pushHud();
   }
 
@@ -287,7 +290,26 @@ export class PeakCommandoGame {
     this.pushHud();
   }
 
+  /** Cheat de prototipo: salta a la siguiente era para revisar todo el contenido. */
+  private cheatNextEra() {
+    if (this.phase !== "playing") return;
+    this.feed("CHEAT: salto temporal adelantado → siguiente era.", "fun");
+    this.completeEra();
+  }
+
   // ============================ input ============================
+  private lockPointer() {
+    try {
+      const r = this.canvas.requestPointerLock() as unknown as Promise<void> | undefined;
+      if (r && typeof r.catch === "function") r.catch(() => { this.pointerLockBroken = true; });
+    } catch {
+      this.pointerLockBroken = true;
+    }
+    window.setTimeout(() => {
+      if (document.pointerLockElement !== this.canvas) this.pointerLockBroken = true;
+    }, 700);
+  }
+
   private onKeyDown = (e: KeyboardEvent) => {
     if (e.repeat) return;
     this.keys.add(e.code);
@@ -297,27 +319,50 @@ export class PeakCommandoGame {
     if (e.code === "Digit1") this.useConsumable(0);
     if (e.code === "Digit2") this.useConsumable(1);
     if (e.code === "Digit3") this.useConsumable(2);
+    if (e.code === "Escape") this.pause();
+    // --- cheats de prototipo (para revisar el contenido) ---
+    if (e.code === "KeyN") this.cheatNextEra();
+    if (e.code === "KeyT") {
+      this.timeLeft = Math.min(999, this.timeLeft + 120);
+      this.feed("CHEAT: +120 s al cronómetro. El tiempo es vuestro.", "fun");
+      sfx.deposit();
+    }
+    if (e.code === "KeyH") {
+      this.pHp = 100; this.stam = 100; this.cHp = 100;
+      if (this.cDown) { this.cDown = false; this.compGroup.rotation.z = 0; }
+      this.feed("CHEAT: escuadrón a plena salud.", "fun");
+      sfx.revive();
+    }
   };
   private onKeyUp = (e: KeyboardEvent) => this.keys.delete(e.code);
 
   private onMouseMove = (e: MouseEvent) => {
-    if (document.pointerLockElement !== this.canvas || this.phase !== "playing") return;
+    if (this.phase !== "playing") return;
+    const locked = document.pointerLockElement === this.canvas;
+    // Si el entorno no soporta pointer lock (iframes, permisos), el cursor girando la cámara actúa como fallback.
+    if (!locked && !this.pointerLockBroken) return;
     this.yaw -= e.movementX * 0.0024;
     this.pitch = clamp(this.pitch - e.movementY * 0.0024, -1.45, 1.45);
   };
 
   private onMouseDown = (e: MouseEvent) => {
     if (e.button !== 0) return;
-    if (this.phase === "playing" && document.pointerLockElement !== this.canvas) {
-      this.canvas.requestPointerLock();
+    if (this.phase !== "playing") return;
+    if (document.pointerLockElement !== this.canvas) {
+      if (!this.pointerLockBroken) this.lockPointer();
+      else this.tryAttack();
       return;
     }
-    if (document.pointerLockElement !== this.canvas || this.phase !== "playing") return;
     this.tryAttack();
   };
 
   private onLockChange = () => {
+    if (this.pointerLockBroken) return;
     if (document.pointerLockElement !== this.canvas && this.phase === "playing") this.pause();
+  };
+
+  private onLockError = () => {
+    this.pointerLockBroken = true;
   };
 
   private onResize = () => {
@@ -379,7 +424,7 @@ export class PeakCommandoGame {
     this.context = era.contexts[Math.floor(rng() * era.contexts.length)];
 
     this.scene.background = new THREE.Color(era.sky);
-    this.scene.fog = new THREE.Fog(era.fog, eraIdx === 4 ? 26 : 42, eraIdx === 4 ? 105 : 150);
+    this.scene.fog = new THREE.Fog(era.fog, eraIdx === 4 ? 45 : 70, eraIdx === 4 ? 230 : 310);
     this.hemi.color.set(era.light);
     this.dir.color.set(era.light);
     this.dir.intensity = eraIdx === 4 ? 0.75 : 1.15;
@@ -393,17 +438,17 @@ export class PeakCommandoGame {
         if (d <= ISLAND_R) this.heights[i + j * N] = 0;
       }
     }
-    const bumps = 4;
+    const bumps = 7;
     for (let b = 0; b < bumps; b++) {
-      const a = rng() * Math.PI * 2, dist = 6 + rng() * 13;
+      const a = rng() * Math.PI * 2, dist = 10 + rng() * 40;
       const bx = Math.cos(a) * dist, bz = Math.sin(a) * dist;
-      const r = 5 + rng() * 4.5, hMax = 1 + Math.floor(rng() * 3);
+      const r = 8 + rng() * 8, hMax = 2 + Math.floor(rng() * 3);
       for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) {
         const idx = i + j * N;
         if (this.heights[idx] < 0) continue;
         const x = ORIGIN + i * CELL, z = ORIGIN + j * CELL;
         const d = Math.hypot(x - bx, z - bz);
-        if (d < r) this.heights[idx] = Math.max(this.heights[idx], Math.min(3, Math.round(hMax * (1 - d / r))));
+        if (d < r) this.heights[idx] = Math.max(this.heights[idx], Math.min(4, Math.round(hMax * (1 - d / r))));
       }
     }
 
@@ -412,34 +457,49 @@ export class PeakCommandoGame {
       const a = (deg * Math.PI) / 180;
       return new THREE.Vector3(Math.cos(a) * dist, 0, Math.sin(a) * dist);
     };
+    // 7 mazmorras repartidas por la isla (estilo mundo abierto), el jefe al norte
     const dunSpots = [
-      spotAt(95 + rng() * 12, 16.5),
-      spotAt(215 + rng() * 12, 17.5),
-      spotAt(335 + rng() * 12, 16.5),
+      spotAt(85 + rng() * 10, 28),
+      spotAt(130 + rng() * 10, 38),
+      spotAt(175 + rng() * 10, 30),
+      spotAt(220 + rng() * 10, 40),
+      spotAt(265 + rng() * 10, 27),
+      spotAt(310 + rng() * 10, 38),
+      spotAt(355 + rng() * 10, 30),
     ];
-    const bossSpot = spotAt(30, 20.5);
-    const cpSpots = [spotAt(150, 10.5), spotAt(270, 9.5), spotAt(45, 11.5)];
-    const spawnSpot = spotAt(210, 7);
-    for (const s of dunSpots) this.flatten(s.x, s.z, 7, 7, 0);
-    this.flatten(bossSpot.x, bossSpot.z, 7, 7, 0);
-    for (const s of cpSpots) this.flatten(s.x, s.z, 2.4, 2.4, 0);
-    this.flatten(spawnSpot.x, spawnSpot.z, 2.4, 2.4, 0);
-    for (const b of [0, 1, 2, 3]) {
-      const bh = Math.max(1, Math.round(2 + rng() * 1.4));
-      const ba = rng() * Math.PI * 2, bd = 24 + rng() * 3;
-      this.flatten(Math.cos(ba) * bd, Math.sin(ba) * bd, 1.6, 1.6, bh);
+    const bossSpot = spotAt(30, 46);
+    const cpSpots = [
+      spotAt(205, 24),
+      spotAt(150, 40),
+      spotAt(258, 42),
+      spotAt(332, 46),
+      spotAt(62, 40),
+    ];
+    const spawnSpot = spotAt(205, 38);
+    const landmarkSpots = [spotAt(55, 20), spotAt(152, 22), spotAt(243, 20), spotAt(332, 19)];
+    for (const s of dunSpots) this.flatten(s.x, s.z, 8.5, 8.5, 0);
+    this.flatten(bossSpot.x, bossSpot.z, 15, 15, 0);
+    for (const s of cpSpots) this.flatten(s.x, s.z, 2.6, 2.6, 0);
+    this.flatten(spawnSpot.x, spawnSpot.z, 3.2, 3.2, 0);
+    for (const s of landmarkSpots) this.flatten(s.x, s.z, 5, 5, 0);
+    for (const b of [0, 1, 2, 3, 4, 5]) {
+      const bh = Math.max(1, Math.round(2 + rng() * 1.6));
+      const ba = rng() * Math.PI * 2, bd = 30 + rng() * 20;
+      this.flatten(Math.cos(ba) * bd, Math.sin(ba) * bd, 2.2, 2.2, bh);
     }
 
     this.buildTerrain(era, rng);
-    this.buildProps(era, rng, [...dunSpots, bossSpot, ...cpSpots, spawnSpot]);
-    this.buildDungeon("arena", dunSpots[0], 0, era, rng);
-    this.buildDungeon("stealth", dunSpots[1], 1, era, rng);
-    this.buildDungeon("fortress", dunSpots[2], 2, era, rng);
+    this.buildProps(era, rng, [...dunSpots, bossSpot, ...cpSpots, spawnSpot, ...landmarkSpots]);
+    this.buildLandmarks(landmarkSpots, era, rng);
+    const archetypes: Array<"arena" | "stealth" | "fortress" | "treasure"> =
+      ["arena", "stealth", "fortress", "treasure", "arena", "stealth", "fortress"];
+    const tiers = [0, 1, 2, 3, 1, 2, 2];
+    archetypes.forEach((t, i) => this.buildDungeon(t, dunSpots[i], tiers[i], era, rng));
     this.buildBossArena(bossSpot, era);
     for (const s of cpSpots) this.buildControlPoint(s, era);
-    for (let k = 0; k < 6; k++) this.scatterFrag(rng);
-    for (let k = 0; k < 2; k++) this.buildLootCrate(rng, era);
-    for (let k = 0; k < 7; k++) this.spawnOpenEnemy(rng, [...dunSpots, bossSpot], era);
+    for (let k = 0; k < 12; k++) this.scatterFrag(rng);
+    for (let k = 0; k < 4; k++) this.buildLootCrate(rng, era);
+    for (let k = 0; k < 16; k++) this.spawnOpenEnemy(rng, [...dunSpots, bossSpot, spawnSpot], era);
     this.buildAmbient(era, rng);
 
     // --- player & companion placement ---
@@ -458,7 +518,7 @@ export class PeakCommandoGame {
     this.updateWeaponMesh();
 
     if (isMenu) {
-      this.camera.position.set(46, 22, 0);
+      this.camera.position.set(96, 42, 0);
       this.camera.lookAt(0, 2, 0);
     } else {
       this.feed(`DESPLIEGUE: ${era.name} — «${this.context}»`, "info");
@@ -519,12 +579,12 @@ export class PeakCommandoGame {
   }
 
   private buildProps(era: EraDef, rng: () => number, reserved: THREE.Vector3[]) {
-    const count = 26;
+    const count = 70;
     let placed = 0, guard = 0;
-    while (placed < count && guard++ < 400) {
-      const a = rng() * Math.PI * 2, d = 4 + rng() * 24;
+    while (placed < count && guard++ < 1600) {
+      const a = rng() * Math.PI * 2, d = 5 + rng() * 54;
       const x = Math.cos(a) * d, z = Math.sin(a) * d;
-      if (!this.reservedOk(x, z, reserved, 7.5)) continue;
+      if (!this.reservedOk(x, z, reserved, 9)) continue;
       const th = this.terrainAt(x, z);
       if (th < 0) continue;
       this.buildOneProp(era, rng, x, th, z);
@@ -594,6 +654,40 @@ export class PeakCommandoGame {
     }
   }
 
+  // ---------------- landmarks (silueta de mundo abierto) ----------------
+  private buildLandmarks(spots: THREE.Vector3[], era: EraDef, rng: () => number) {
+    spots.forEach((s, i) => {
+      const kind = (i + Math.floor(rng() * 3)) % 3;
+      if (kind === 0) {
+        // Atalaya alta: se ve desde toda la isla
+        const h = 11 + rng() * 5;
+        this.box(4.4, 2, 4.4, 0x4c463c, s.x, 1, s.z);
+        this.box(2.8, h, 2.8, 0x5d564a, s.x, 2 + h / 2, s.z);
+        this.box(4, 0.7, 4, 0x4c463c, s.x, 2 + h + 0.35, s.z);
+        this.box(0.5, 1.6, 0.5, era.accent, s.x, 2 + h + 1.4, s.z, { collide: false, emissive: 0.9 });
+        this.box(0.12, 2.6, 0.12, 0x3a3f3a, s.x + 1.3, 2 + h + 1.9, s.z, { collide: false });
+        this.box(1.1, 0.6, 0.08, era.accent, s.x + 1.9, 2 + h + 2.8, s.z, { collide: false });
+      } else if (kind === 1) {
+        // Meseta con santuario y escalera tallada
+        this.box(10, 4, 10, 0x57503f, s.x, 2, s.z);
+        this.box(4, 1, 2.4, 0x57503f, s.x, 0.5, s.z + 6, { collide: false });
+        this.box(4, 2, 1.6, 0x57503f, s.x, 1, s.z + 5.4);
+        this.box(4, 3, 1, 0x57503f, s.x, 1.5, s.z + 4.9, { collide: false });
+        this.box(2.6, 3.2, 2.6, 0x6a6355, s.x, 4 + 1.6, s.z - 1);
+        this.box(3, 0.5, 3, era.accent, s.x, 4 + 3.4, s.z - 1, { collide: false, emissive: 0.55 });
+        this.box(0.7, 0.7, 0.7, 0x35e0ff, s.x, 4 + 4, s.z - 1, { collide: false, emissive: 1 });
+      } else {
+        // Arco colosal en ruinas
+        this.box(1.6, 7, 1.6, 0x5d564a, s.x - 3.4, 3.5, s.z);
+        this.box(1.6, 7, 1.6, 0x5d564a, s.x + 3.4, 3.5, s.z);
+        this.box(9, 1.3, 2, 0x6a6355, s.x, 7.6, s.z, { collide: false });
+        this.box(1.2, 1.2, 1.2, 0x4c463c, s.x + 5.4, 0.6, s.z + 1.6, { collide: false });
+        this.box(1.5, 0.9, 1.1, 0x4c463c, s.x - 5.2, 0.45, s.z - 1.2, { collide: false });
+        this.box(0.8, 0.8, 0.8, era.accent, s.x, 0.4, s.z + 2.6, { collide: false, emissive: 0.7 });
+      }
+    });
+  }
+
   // ---------------- dungeons ----------------
   private wallRect(cx: number, cz: number, w: number, d: number, h: number, th: number, color: number, gapSide: number) {
     const hw = w / 2, hd = d / 2, t = 0.6;
@@ -614,11 +708,11 @@ export class PeakCommandoGame {
     this.box(0.5, 0.3, 0.14, label, x, y + 2.1, z + 0.02, { collide: false, emissive: 0.5 });
   }
 
-  private buildDungeon(type: "arena" | "stealth" | "fortress", spot: THREE.Vector3, tier: number, era: EraDef, rng: () => number) {
+  private buildDungeon(type: "arena" | "stealth" | "fortress" | "treasure", spot: THREE.Vector3, tier: number, era: EraDef, rng: () => number) {
     const x = spot.x, z = spot.z;
     const th = 0;
     const wallColor = era.propStyle === "future" ? 0x1a2438 : era.propStyle === "west" ? 0x8a5a33 : era.propStyle === "medieval" ? 0x6a6f78 : era.propStyle === "modern" ? 0x6f756c : 0x5d4a33;
-    const diffColor = tier === 0 ? 0x6fae4e : tier === 1 ? 0xffb02e : 0xff4438;
+    const diffColor = tier === 0 ? 0x6fae4e : tier === 1 ? 0xffb02e : tier === 3 ? 0xff3bd4 : 0xff4438;
 
     if (type === "arena") {
       this.wallRect(x, z, 10, 10, 1.5, th, wallColor, 1);
@@ -634,6 +728,17 @@ export class PeakCommandoGame {
       this.addFrag(x - 1, 0, z + 3.2);
       this.spawnEnemy(era, "brute", x - 0.5, z - 0.5, new THREE.Vector3(x, 0, z));
       this.box(1.1, 0.5, 1.1, 0x4a3f2a, x - 3, th + 0.25, z + 2.5, { collide: false });
+    } else if (type === "treasure") {
+      // Cámara legendaria: sin desafío, puro botín
+      this.wallRect(x, z, 8.4, 8.4, 2.4, th, wallColor, 0);
+      this.banner(x - 5, th, z - 5, 0xff3bd4, 0xff3bd4);
+      this.buildChestAt(x - 2.4, z + 2.2, 0);
+      this.buildChestAt(x + 2.4, z + 2.2, 0);
+      this.buildChestAt(x, z - 2.2, 0);
+      this.addFrag(x, 0, z + 0.4);
+      this.addFrag(x - 2.4, 0, z - 0.6);
+      this.addFrag(x + 2.4, 0, z - 0.6);
+      this.box(1.4, 0.35, 1.4, 0xffd76a, x, th + 0.18, z, { collide: false, emissive: 0.6 });
     } else {
       this.wallRect(x, z, 13, 10.5, 2.7, th, wallColor, 2);
       this.banner(x - 7.2, th, z - 5.8, era.accent, diffColor);
