@@ -8,6 +8,12 @@
 import * as THREE from "three";
 import { ERAS, TOTAL_ERAS, ABSURD_DEATHS, type EraDef, type WeaponDef, type EnemyDef } from "./eras";
 import { sfx } from "./audio";
+import { GAME_CONFIG } from "./config";
+import { TimeDirector } from "./TimeDirector";
+import { createEraLayout, type EraId } from "../world/eraLayout";
+import { assignDungeons } from "../world/dungeonPlacer";
+
+const ERA_ID_MAP: EraId[] = ["prehistoria", "medieval", "oeste", "moderna", "futuro"];
 
 export type Phase = "menu" | "playing" | "paused" | "transition" | "over" | "victory";
 
@@ -115,8 +121,9 @@ export class PeakCommandoGame {
 
   private islandGroup = new THREE.Group();
   private worldGroup = new THREE.Group();
-  private heights = new Int8Array(N * N);
   private colliders: Collider[] = [];
+  private flatZones: Array<{ x: number; z: number; r: number }> = [];
+  private timeDirector!: TimeDirector;
 
   private keys = new Set<string>();
   private interactPressed = false;
@@ -208,9 +215,17 @@ export class PeakCommandoGame {
   constructor(canvas: HTMLCanvasElement, cb: Callbacks) {
     this.canvas = canvas;
     this.cb = cb;
+    this.timeDirector = new TimeDirector({
+      onTimeExpired: () => this.die("time"),
+      onLowTime: () => this.feed("¡ALERTA TEMPORAL! Quedan menos de 60 segundos.", "bad"),
+      onTimeAdded: (amount, reason) => {
+        this.feed(`+${Math.round(amount)}s de tiempo (${reason}).`, "good");
+      },
+    });
+
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: "high-performance" });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.75));
-    this.camera = new THREE.PerspectiveCamera(75, 1, 0.1, 700);
+    this.camera = new THREE.PerspectiveCamera(75, 1, 0.1, 1200);
     this.camera.rotation.order = "YXZ";
     this.scene.add(this.camera);
     this.camera.add(this.weaponGroup);
@@ -255,7 +270,9 @@ export class PeakCommandoGame {
     sfx.unlock();
     this.runId++;
     this.score = 0; this.frags = 0; this.kills = 0; this.deposited = 0; this.erasCleared = 0;
-    this.timeLeft = 420; // GAME_CONFIG.time.initial
+    this.timeDirector.reset();
+    this.timeDirector.start();
+    this.timeLeft = Math.round(this.timeDirector.time);
     this.pHp = 100; this.stam = 100;
     this.weapon = null; this.cons = [1, 0, 0];
     this.adrenalineT = 0; this.pDead = false; this.deathLine = "";
@@ -271,6 +288,7 @@ export class PeakCommandoGame {
   pause() {
     if (this.phase !== "playing") return;
     this.phase = "paused";
+    this.timeDirector.pause();
     if (document.pointerLockElement === this.canvas) document.exitPointerLock();
     this.pushHud();
   }
@@ -279,6 +297,7 @@ export class PeakCommandoGame {
     if (this.phase !== "paused") return;
     sfx.unlock();
     this.phase = "playing";
+    this.timeDirector.start();
     this.lockPointer();
     this.pushHud();
   }
@@ -373,27 +392,34 @@ export class PeakCommandoGame {
   };
 
   // ============================ world building ============================
-  private cellIdx(x: number, z: number): number {
-    const i = Math.round((x - ORIGIN) / CELL);
-    const j = Math.round((z - ORIGIN) / CELL);
-    if (i < 0 || j < 0 || i >= N || j >= N) return -1;
-    return i + j * N;
-  }
-
   private terrainAt(x: number, z: number): number {
-    const idx = this.cellIdx(x, z);
-    if (idx < 0) return -100;
-    const h = this.heights[idx];
-    return h < 0 ? -100 : h;
-  }
+    if (Math.abs(x) > 550 || z < -880 || z > 880) return -100;
 
-  private flatten(cx: number, cz: number, hw: number, hd: number, h: number) {
-    for (let x = cx - hw; x <= cx + hw; x += 1) {
-      for (let z = cz - hd; z <= cz + hd; z += 1) {
-        const idx = this.cellIdx(x, z);
-        if (idx >= 0) this.heights[idx] = h;
-      }
+    // Bordes naturales montañosos perimetrales
+    if (Math.abs(x) > 460) return (Math.abs(x) - 460) * 0.45;
+    if (z < -760) return (-760 - z) * 0.45;
+    if (z > 760) return (z - 760) * 0.45;
+
+    // Zonas planas estratégicas (spawn, boss, mazmorras, puntos de control, hitos)
+    for (let i = 0; i < this.flatZones.length; i++) {
+      const f = this.flatZones[i];
+      const dx = x - f.x, dz = z - f.z;
+      if (dx * dx + dz * dz < f.r * f.r) return 0;
     }
+
+    // Carriles principales de avance (oeste -340, central 0, este +340)
+    if (Math.abs(x) < 20 && z >= -740 && z <= 740) return 0;
+    if (Math.abs(x + 340) < 20 && z >= -660 && z <= 520) return 0;
+    if (Math.abs(x - 340) < 20 && z >= -660 && z <= 520) return 0;
+
+    // Enlaces transversales entre carriles
+    for (const cz of [-560, -320, -80, 160, 400]) {
+      if (Math.abs(z - cz) < 18 && Math.abs(x) < 380) return 0;
+    }
+
+    // Colinas y desniveles suaves entre rutas
+    const raw = Math.sin(x * 0.02) * Math.cos(z * 0.02) * 2.2 + Math.sin(x * 0.045 + z * 0.035) * 1.5;
+    return Math.max(0, Math.min(4.5, raw));
   }
 
   private clearIsland() {
@@ -417,6 +443,7 @@ export class PeakCommandoGame {
 
   private buildIsland(eraIdx: number, isMenu = false) {
     this.clearIsland();
+    this.flatZones = [];
     this.eraIdx = eraIdx;
     this.era = ERAS[eraIdx];
     const era = this.era;
@@ -424,90 +451,98 @@ export class PeakCommandoGame {
     this.context = era.contexts[Math.floor(rng() * era.contexts.length)];
 
     this.scene.background = new THREE.Color(era.sky);
-    this.scene.fog = new THREE.Fog(era.fog, eraIdx === 4 ? 45 : 70, eraIdx === 4 ? 230 : 310);
+    this.scene.fog = new THREE.Fog(era.fog, eraIdx === 4 ? 90 : 120, eraIdx === 4 ? 420 : 550);
     this.hemi.color.set(era.light);
     this.dir.color.set(era.light);
     this.dir.intensity = eraIdx === 4 ? 0.75 : 1.15;
 
-    // --- heightmap ---
-    this.heights.fill(-1);
-    for (let j = 0; j < N; j++) {
-      for (let i = 0; i < N; i++) {
-        const x = ORIGIN + i * CELL, z = ORIGIN + j * CELL;
-        const d = Math.hypot(x, z);
-        if (d <= ISLAND_R) this.heights[i + j * N] = 0;
-      }
-    }
-    const bumps = 7;
-    for (let b = 0; b < bumps; b++) {
-      const a = rng() * Math.PI * 2, dist = 10 + rng() * 40;
-      const bx = Math.cos(a) * dist, bz = Math.sin(a) * dist;
-      const r = 8 + rng() * 8, hMax = 2 + Math.floor(rng() * 3);
-      for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) {
-        const idx = i + j * N;
-        if (this.heights[idx] < 0) continue;
-        const x = ORIGIN + i * CELL, z = ORIGIN + j * CELL;
-        const d = Math.hypot(x - bx, z - bz);
-        if (d < r) this.heights[idx] = Math.max(this.heights[idx], Math.min(4, Math.round(hMax * (1 - d / r))));
-      }
+    // Layout y mazmorras desde eraLayout y dungeonPlacer
+    const eraId = ERA_ID_MAP[eraIdx] ?? "prehistoria";
+    const layout = createEraLayout(eraId);
+    const assignedDungeons = assignDungeons(
+      layout,
+      eraIdx * 7919 + 17 + this.runId * 131,
+      GAME_CONFIG.dungeons.activeDungeons
+    );
+
+    const spawnSpot = new THREE.Vector3(layout.spawn.x, 0, layout.spawn.z);
+    const bossSpot = new THREE.Vector3(layout.bossPosition.x, 0, layout.bossPosition.z);
+
+    this.flatZones.push({ x: spawnSpot.x, z: spawnSpot.z, r: 35 });
+    this.flatZones.push({ x: bossSpot.x, z: bossSpot.z, r: 45 });
+
+    assignedDungeons.forEach((ad) => {
+      this.flatZones.push({ x: ad.socket.position.x, z: ad.socket.position.z, r: 24 });
+    });
+
+    const cpSpots = [
+      new THREE.Vector3(0, 0, -560),
+      new THREE.Vector3(-280, 0, -320),
+      new THREE.Vector3(280, 0, -320),
+      new THREE.Vector3(0, 0, -80),
+      new THREE.Vector3(-280, 0, 160),
+      new THREE.Vector3(280, 0, 160),
+      new THREE.Vector3(0, 0, 400),
+    ];
+    for (const cp of cpSpots) {
+      this.flatZones.push({ x: cp.x, z: cp.z, r: 12 });
     }
 
-    // --- reserved spots ---
-    const spotAt = (deg: number, dist: number) => {
-      const a = (deg * Math.PI) / 180;
-      return new THREE.Vector3(Math.cos(a) * dist, 0, Math.sin(a) * dist);
-    };
-    // 7 mazmorras repartidas por la isla (estilo mundo abierto), el jefe al norte
-    const dunSpots = [
-      spotAt(85 + rng() * 10, 28),
-      spotAt(130 + rng() * 10, 38),
-      spotAt(175 + rng() * 10, 30),
-      spotAt(220 + rng() * 10, 40),
-      spotAt(265 + rng() * 10, 27),
-      spotAt(310 + rng() * 10, 38),
-      spotAt(355 + rng() * 10, 30),
+    const landmarkSpots = [
+      new THREE.Vector3(-180, 0, -440),
+      new THREE.Vector3(180, 0, -200),
+      new THREE.Vector3(-180, 0, 40),
+      new THREE.Vector3(180, 0, 280),
     ];
-    const bossSpot = spotAt(30, 46);
-    const cpSpots = [
-      spotAt(205, 24),
-      spotAt(150, 40),
-      spotAt(258, 42),
-      spotAt(332, 46),
-      spotAt(62, 40),
-    ];
-    const spawnSpot = spotAt(205, 38);
-    const landmarkSpots = [spotAt(55, 20), spotAt(152, 22), spotAt(243, 20), spotAt(332, 19)];
-    for (const s of dunSpots) this.flatten(s.x, s.z, 8.5, 8.5, 0);
-    this.flatten(bossSpot.x, bossSpot.z, 15, 15, 0);
-    for (const s of cpSpots) this.flatten(s.x, s.z, 2.6, 2.6, 0);
-    this.flatten(spawnSpot.x, spawnSpot.z, 3.2, 3.2, 0);
-    for (const s of landmarkSpots) this.flatten(s.x, s.z, 5, 5, 0);
-    for (const b of [0, 1, 2, 3, 4, 5]) {
-      const bh = Math.max(1, Math.round(2 + rng() * 1.6));
-      const ba = rng() * Math.PI * 2, bd = 30 + rng() * 20;
-      this.flatten(Math.cos(ba) * bd, Math.sin(ba) * bd, 2.2, 2.2, bh);
+    for (const lm of landmarkSpots) {
+      this.flatZones.push({ x: lm.x, z: lm.z, r: 16 });
     }
 
     this.buildTerrain(era, rng);
-    this.buildProps(era, rng, [...dunSpots, bossSpot, ...cpSpots, spawnSpot, ...landmarkSpots]);
+
+    const reserved = [
+      spawnSpot,
+      bossSpot,
+      ...assignedDungeons.map((d) => new THREE.Vector3(d.socket.position.x, 0, d.socket.position.z)),
+      ...cpSpots,
+      ...landmarkSpots,
+    ];
+
+    this.buildProps(era, rng, reserved);
     this.buildLandmarks(landmarkSpots, era, rng);
-    const archetypes: Array<"arena" | "stealth" | "fortress" | "treasure"> =
-      ["arena", "stealth", "fortress", "treasure", "arena", "stealth", "fortress"];
-    const tiers = [0, 1, 2, 3, 1, 2, 2];
-    archetypes.forEach((t, i) => this.buildDungeon(t, dunSpots[i], tiers[i], era, rng));
+
+    const archetypeMap: Record<string, "arena" | "stealth" | "fortress" | "treasure"> = {
+      exterminio: "arena",
+      era: "arena",
+      fortaleza: "fortress",
+      sigilo: "stealth",
+      legendaria: "treasure",
+    };
+    const tierMap: Record<string, number> = {
+      easy: 0,
+      medium: 1,
+      hard: 2,
+    };
+
+    assignedDungeons.forEach((ad) => {
+      const spot = new THREE.Vector3(ad.socket.position.x, 0, ad.socket.position.z);
+      const tier = ad.archetype === "legendaria" ? 3 : (tierMap[ad.difficulty] ?? 1);
+      this.buildDungeon(archetypeMap[ad.archetype] ?? "arena", spot, tier, era, rng);
+    });
+
     this.buildBossArena(bossSpot, era);
     for (const s of cpSpots) this.buildControlPoint(s, era);
-    for (let k = 0; k < 12; k++) this.scatterFrag(rng);
-    for (let k = 0; k < 4; k++) this.buildLootCrate(rng, era);
-    for (let k = 0; k < 16; k++) this.spawnOpenEnemy(rng, [...dunSpots, bossSpot, spawnSpot], era);
+    for (let k = 0; k < 36; k++) this.scatterFrag(rng);
+    for (let k = 0; k < 8; k++) this.buildLootCrate(rng, era);
+    for (let k = 0; k < 30; k++) this.spawnOpenEnemy(rng, reserved, era);
     this.buildAmbient(era, rng);
 
     // --- player & companion placement ---
     const th = this.terrainAt(spawnSpot.x, spawnSpot.z);
     this.pPos.set(spawnSpot.x, Math.max(th, 0) + 0.02, spawnSpot.z);
     this.pVel.set(0, 0, 0);
-    const toC = Math.atan2(-spawnSpot.x, -spawnSpot.z);
-    this.yaw = toC; this.pitch = 0;
+    this.yaw = 0;
+    this.pitch = 0;
     this.camH = 1.55;
     this.cPos.set(spawnSpot.x + 1.6, Math.max(th, 0) + 0.02, spawnSpot.z + 1.2);
     this.cVel.set(0, 0, 0);
@@ -518,48 +553,72 @@ export class PeakCommandoGame {
     this.updateWeaponMesh();
 
     if (isMenu) {
-      this.camera.position.set(96, 42, 0);
-      this.camera.lookAt(0, 2, 0);
+      this.camera.position.set(45, 35, -660);
+      this.camera.lookAt(0, 8, -560);
     } else {
       this.feed(`DESPLIEGUE: ${era.name} — «${this.context}»`, "info");
     }
   }
 
   private buildTerrain(era: EraDef, rng: () => number) {
-    const cells: number[] = [];
-    for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) {
-      const idx = i + j * N;
-      if (this.heights[idx] >= 0) cells.push(idx);
+    const w = 1100, d = 1760;
+    const segW = 72, segD = 116;
+    const geo = new THREE.PlaneGeometry(w, d, segW, segD);
+    geo.rotateX(-Math.PI / 2);
+
+    const pos = geo.attributes.position;
+    const colors: number[] = [];
+    const c1 = new THREE.Color(era.groundTop);
+    const c2 = new THREE.Color(era.groundTop2);
+    const cliffCol = new THREE.Color(era.groundSide);
+    const pathCol = new THREE.Color(era.accent).lerp(c2, 0.65);
+
+    for (let i = 0; i < pos.count; i++) {
+      const vx = pos.getX(i);
+      const vz = pos.getZ(i);
+      const vy = this.terrainAt(vx, vz);
+      pos.setY(i, vy);
+
+      if (Math.abs(vx) > 460 || vz < -760 || vz > 760) {
+        colors.push(cliffCol.r, cliffCol.g, cliffCol.b);
+      } else if (Math.abs(vx) < 22 || Math.abs(vx + 340) < 22 || Math.abs(vx - 340) < 22) {
+        colors.push(pathCol.r, pathCol.g, pathCol.b);
+      } else {
+        const mix = 0.5 + Math.sin(vx * 0.03 + vz * 0.03) * 0.4;
+        const col = c1.clone().lerp(c2, mix);
+        colors.push(col.r, col.g, col.b);
+      }
     }
-    const topGeo = new THREE.BoxGeometry(CELL, 1, CELL);
-    const sideGeo = new THREE.BoxGeometry(CELL * 0.98, 1, CELL * 0.98);
-    const white = new THREE.MeshLambertMaterial({ color: 0xffffff });
-    const topMesh = new THREE.InstancedMesh(topGeo, white, cells.length);
-    const sideMesh = new THREE.InstancedMesh(sideGeo, white, cells.length * 2);
+
+    geo.setAttribute("color", new THREE.Float32BufferAttribute(colors, 3));
+    geo.computeVertexNormals();
+
+    const mat = new THREE.MeshLambertMaterial({ vertexColors: true });
+    const terrainMesh = new THREE.Mesh(geo, mat);
+    this.islandGroup.add(terrainMesh);
+
+    // Paredes de colisión y acantilados en el borde exterior
+    const cliffH = 22;
+    this.box(25, cliffH, d, era.groundSide, -510, cliffH / 2, 0, { parent: this.islandGroup });
+    this.box(25, cliffH, d, era.groundSide, 510, cliffH / 2, 0, { parent: this.islandGroup });
+    this.box(w, cliffH, 25, era.groundSide, 0, cliffH / 2, -820, { parent: this.islandGroup });
+    this.box(w, cliffH, 25, era.groundSide, 0, cliffH / 2, 820, { parent: this.islandGroup });
+
+    // Hitos y mojones a lo largo de los 3 carriles
+    const markerGeo = new THREE.BoxGeometry(0.8, 1.6, 0.8);
+    const markerMat = new THREE.MeshLambertMaterial({ color: era.accent, emissive: era.accent, emissiveIntensity: 0.35 });
+    const markers = new THREE.InstancedMesh(markerGeo, markerMat, 42);
     const m = new THREE.Matrix4();
-    const col = new THREE.Color();
-    const c1 = new THREE.Color(era.groundTop), c2 = new THREE.Color(era.groundTop2);
-    const side = new THREE.Color(era.groundSide), sideDark = new THREE.Color(era.groundSide).multiplyScalar(0.72);
-    cells.forEach((idx, k) => {
-      const i = idx % N, j = Math.floor(idx / N);
-      const x = ORIGIN + i * CELL, z = ORIGIN + j * CELL;
-      const h = this.heights[idx];
-      const jit = (rng() - 0.5) * 0.07;
-      m.makeTranslation(x, h - 0.5 + jit, z);
-      topMesh.setMatrixAt(k, m);
-      col.copy(rng() > 0.5 ? c1 : c2);
-      col.multiplyScalar(0.94 + rng() * 0.12);
-      topMesh.setColorAt(k, col);
-      m.makeTranslation(x, h - 1.5, z);
-      sideMesh.setMatrixAt(k * 2, m);
-      sideMesh.setColorAt(k * 2, side);
-      m.makeTranslation(x, h - 2.5, z);
-      sideMesh.setMatrixAt(k * 2 + 1, m);
-      sideMesh.setColorAt(k * 2 + 1, sideDark);
-    });
-    if (topMesh.instanceColor) topMesh.instanceColor.needsUpdate = true;
-    if (sideMesh.instanceColor) sideMesh.instanceColor.needsUpdate = true;
-    this.islandGroup.add(topMesh, sideMesh);
+    let mIdx = 0;
+    for (const laneX of [-340, 0, 340]) {
+      for (let lz = -680; lz <= 660; lz += 100) {
+        if (mIdx >= 42) break;
+        const ly = this.terrainAt(laneX + 4, lz);
+        m.makeTranslation(laneX + 4, ly + 0.8, lz);
+        markers.setMatrixAt(mIdx++, m);
+      }
+    }
+    this.islandGroup.add(markers);
   }
 
   private box(w: number, h: number, d: number, color: number, x: number, y: number, z: number, opts: { collide?: boolean; emissive?: number; parent?: THREE.Object3D } = {}): THREE.Mesh {
@@ -579,14 +638,14 @@ export class PeakCommandoGame {
   }
 
   private buildProps(era: EraDef, rng: () => number, reserved: THREE.Vector3[]) {
-    const count = 70;
+    const count = 140;
     let placed = 0, guard = 0;
-    while (placed < count && guard++ < 1600) {
-      const a = rng() * Math.PI * 2, d = 5 + rng() * 54;
-      const x = Math.cos(a) * d, z = Math.sin(a) * d;
-      if (!this.reservedOk(x, z, reserved, 9)) continue;
+    while (placed < count && guard++ < 3000) {
+      const x = (rng() - 0.5) * 820;
+      const z = -720 + rng() * 1440;
+      if (!this.reservedOk(x, z, reserved, 14)) continue;
       const th = this.terrainAt(x, z);
-      if (th < 0) continue;
+      if (th < 0 || th > 5) continue;
       this.buildOneProp(era, rng, x, th, z);
       placed++;
     }
@@ -772,11 +831,11 @@ export class PeakCommandoGame {
   }
 
   private buildLootCrate(rng: () => number, era: EraDef) {
-    for (let guard = 0; guard < 60; guard++) {
-      const a = rng() * Math.PI * 2, d = 6 + rng() * 20;
-      const x = Math.cos(a) * d, z = Math.sin(a) * d;
+    for (let guard = 0; guard < 100; guard++) {
+      const x = (rng() - 0.5) * 720;
+      const z = -680 + rng() * 1360;
       const th = this.terrainAt(x, z);
-      if (th < 0) continue;
+      if (th < 0 || th > 5) continue;
       this.box(0.9, 0.9, 0.9, era.propStyle === "future" ? 0x182236 : 0x6b4a2f, x, th + 0.45, z, { collide: false });
       const g = new THREE.Group();
       g.position.set(x, th, z);
@@ -868,25 +927,25 @@ export class PeakCommandoGame {
   }
 
   private scatterFrag(rng: () => number) {
-    for (let guard = 0; guard < 80; guard++) {
-      const a = rng() * Math.PI * 2, d = 5 + rng() * 22;
-      const x = Math.cos(a) * d, z = Math.sin(a) * d;
-      const th = this.terrainAt(x, z);
-      if (th < 0) continue;
-      this.addFrag(x, th, z);
+    for (let guard = 0; guard < 100; guard++) {
+      const laneX = [-340, 0, 340][Math.floor(rng() * 3)] + (rng() - 0.5) * 25;
+      const z = -700 + rng() * 1400;
+      const th = this.terrainAt(laneX, z);
+      if (th < 0 || th > 5) continue;
+      this.addFrag(laneX, th, z);
       return;
     }
   }
 
   private buildAmbient(era: EraDef, rng: () => number) {
-    const count = 80;
-    const geo = new THREE.BoxGeometry(0.14, 0.14, 0.14);
+    const count = 120;
+    const geo = new THREE.BoxGeometry(0.18, 0.18, 0.18);
     const mat = new THREE.MeshBasicMaterial({ color: era.ambientColor, transparent: true, opacity: era.propStyle === "future" ? 0.9 : 0.6 });
     this.ambient = new THREE.InstancedMesh(geo, mat, count);
     this.ambientSpd = [];
     const m = new THREE.Matrix4();
     for (let i = 0; i < count; i++) {
-      m.makeTranslation((rng() - 0.5) * 64, rng() * 22, (rng() - 0.5) * 64);
+      m.makeTranslation((rng() - 0.5) * 400, rng() * 35, -700 + rng() * 1400);
       this.ambient.setMatrixAt(i, m);
       this.ambientSpd.push(1.2 + rng() * 2.2);
     }
@@ -944,11 +1003,11 @@ export class PeakCommandoGame {
   }
 
   private spawnOpenEnemy(rng: () => number, reserved: THREE.Vector3[], era: EraDef) {
-    for (let guard = 0; guard < 60; guard++) {
-      const a = rng() * Math.PI * 2, d = 8 + rng() * 18;
-      const x = Math.cos(a) * d, z = Math.sin(a) * d;
-      if (!this.reservedOk(x, z, reserved, 6)) continue;
-      if (this.terrainAt(x, z) < 0) continue;
+    for (let guard = 0; guard < 100; guard++) {
+      const x = (rng() - 0.5) * 740;
+      const z = -660 + rng() * 1320;
+      if (!this.reservedOk(x, z, reserved, 12)) continue;
+      if (this.terrainAt(x, z) < 0 || this.terrainAt(x, z) > 5) continue;
       this.spawnEnemy(era, "normal", x, z, new THREE.Vector3(x, 0, z));
       return;
     }
@@ -1037,6 +1096,8 @@ export class PeakCommandoGame {
       this.portalActive = true;
       this.portalInnerMat.opacity = 0.5;
       this.shake(0.9, 0.8);
+      this.timeDirector.applyBossReward();
+      this.timeLeft = Math.round(this.timeDirector.time);
       this.feed(`¡JEFE DERROTADO! +500 PTS — El portal ruge hacia la siguiente era.`, "good");
     } else {
       const line = this.era.killLines[Math.floor(Math.random() * this.era.killLines.length)];
@@ -1252,8 +1313,10 @@ export class PeakCommandoGame {
       cp.coreMat.color.set(0x555555);
       cp.coreMat.emissive.set(0x222222);
       cp.coreMat.emissiveIntensity = 0.2;
-      const gained = 8 + 3 * this.frags + Math.floor(this.score / 150);
-      this.timeLeft = Math.min(999, this.timeLeft + gained);
+      const gained = this.timeDirector.getControlPointReward(this.frags);
+      this.timeDirector.addTime(gained, "punto de control");
+      this.timeDirector.addScore(25 * this.frags);
+      this.timeLeft = Math.round(this.timeDirector.time);
       this.score += 25 * this.frags;
       this.deposited += this.frags;
       this.lastCPPos.copy(cp.pos);
@@ -1274,7 +1337,9 @@ export class PeakCommandoGame {
 
   private completeEra() {
     this.score += 1000;
-    this.timeLeft = Math.min(999, this.timeLeft + 45);
+    this.timeDirector.addTime(45, "era completada");
+    this.timeDirector.addScore(1000);
+    this.timeLeft = Math.round(this.timeDirector.time);
     this.erasCleared++;
     this.weapon = null;
     this.updateWeaponMesh();
@@ -1740,7 +1805,8 @@ export class PeakCommandoGame {
   }
 
   private updateTimer(dt: number) {
-    this.timeLeft -= dt;
+    this.timeDirector.update(dt);
+    this.timeLeft = Math.round(this.timeDirector.time);
     if (this.timeLeft <= 0) {
       this.timeLeft = 0;
       this.die("time");
