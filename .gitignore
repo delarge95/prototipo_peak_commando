@@ -1,5 +1,17 @@
-node_modules/
-.next/
+﻿# Compiled and build artifacts
+*.tsbuildinfo
 dist/
 build/
+out/
+# Dependencies
+node_modules/
+# Editors
+.vscode/
+.idea/
+# Logs and temp files
 *.log
+*.tmp
+# Environment
+.env
+.env.local
+*.env.*

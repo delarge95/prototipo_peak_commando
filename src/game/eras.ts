@@ -5,6 +5,8 @@
 // jefe, nombres de mazmorras y líneas de muerte absurdas.
 // ============================================================
 
+import { ItemType } from './items';
+
 export type WeaponDef = {
   name: string;
   dmg: number;
@@ -12,6 +14,7 @@ export type WeaponDef = {
   rate: number; // segundos entre golpes
   color: number;
   len: number;
+  itemId?: ItemType;
 };
 
 export type EnemyDef = {
@@ -53,6 +56,9 @@ export const CONSUMABLES = [
   { key: "1", name: "Cáscara de plátano", desc: "Tírala y reza. Resbala enemigos, aliados… y a ti." },
   { key: "2", name: "Granada fétida", desc: "Atrae a todos los enemigos del área durante 6 s." },
   { key: "3", name: "Adrenalina", desc: "+50% velocidad durante 6 s. El corazón aguanta lo que quiera." },
+  { key: "4", name: "Queso apestoso", desc: "Atrae enemigos medievales. Huele mal pero funciona." },
+  { key: "5", name: "Dinamita", desc: "Explosivo clásico. Cuenta atrás incluida." },
+  { key: "6", name: "Batería portátil", desc: "+15 segundos al cronómetro." },
 ] as const;
 
 export const ERAS: EraDef[] = [

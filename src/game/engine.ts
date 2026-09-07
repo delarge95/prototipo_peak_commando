@@ -126,7 +126,7 @@ export class PeakCommandoGame {
   private phase: Phase = "menu";
   private eraIdx = 0;
   private context = "";
-  private timeLeft = 150;
+  private timeLeft = 420; // GAME_CONFIG.time.initial
   private score = 0;
   private frags = 0;
   private runId = 1;
@@ -255,7 +255,7 @@ export class PeakCommandoGame {
     sfx.unlock();
     this.runId++;
     this.score = 0; this.frags = 0; this.kills = 0; this.deposited = 0; this.erasCleared = 0;
-    this.timeLeft = 150;
+    this.timeLeft = 420; // GAME_CONFIG.time.initial
     this.pHp = 100; this.stam = 100;
     this.weapon = null; this.cons = [1, 0, 0];
     this.adrenalineT = 0; this.pDead = false; this.deathLine = "";
