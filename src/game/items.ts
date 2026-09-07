@@ -67,7 +67,7 @@ export type ItemType =
   | 'venda_combate'
   | 'cafe_fuerte'
   | 'mina_terrestre'
-  | 'señuelo_calor'
+  | 'senuelo_calor'
   | 'pildoras_adrenalina'
   | 'paquete_raciones'
   // Futuro - Equipo
@@ -714,7 +714,7 @@ export const ITEMS: Record<ItemType, ItemDef> = {
     color: 0x4a5a3a,
   },
   senuelo_calor: {
-    id: 'señuelo_calor',
+    id: 'senuelo_calor',
     name: 'Señuelo de Calor',
     description: 'Atrae enemigos sensibles al calor. Drones incluidos.',
     category: 'consumible',
