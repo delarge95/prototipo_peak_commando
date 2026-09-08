@@ -12,16 +12,16 @@ export const GAME_CONFIG = {
   },
 
   movement: {
-    walkSpeed: 4.5,
-    runSpeed: 8.0,
-    crouchSpeed: 2.2,
-    crawlSpeed: 1.2,
+    walkSpeed: 5.5,
+    runSpeed: 11.0,
+    crouchSpeed: 2.8,
+    crawlSpeed: 1.5,
 
-    staminaMax: 100,
-    sprintStaminaPerSec: 9,
-    jumpStaminaCost: 16,
+    staminaMax: 200,
+    sprintStaminaPerSec: 14,
+    jumpStaminaCost: 20,
     climbStaminaPerSec: 22,
-    staminaRegenPerSec: 18,
+    staminaRegenPerSec: 28,
 
     fallDamageStart: 6,
     fallDamageLethal: 12,

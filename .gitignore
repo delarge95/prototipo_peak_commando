@@ -1,8 +1,9 @@
-﻿# Compiled and build artifacts
+# Compiled and build artifacts
 *.tsbuildinfo
 dist/
 build/
 out/
+worktrees/
 # Dependencies
 node_modules/
 # Editors

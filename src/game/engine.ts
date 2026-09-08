@@ -12,6 +12,8 @@ import { GAME_CONFIG } from "./config";
 import { TimeDirector } from "./TimeDirector";
 import { createEraLayout, type EraId } from "../world/eraLayout";
 import { assignDungeons } from "../world/dungeonPlacer";
+import { generateDungeonLayout, getEnemySpawnPoints, getTreasurePositions, type RoomDef } from "../world/dungeonGenerator";
+import { ITEMS, ItemType, ItemDef } from "./items";
 
 const ERA_ID_MAP: EraId[] = ["prehistoria", "medieval", "oeste", "moderna", "futuro"];
 
@@ -34,7 +36,7 @@ export type HudData = {
   compHp: number;
   compDown: boolean;
   weapon: string;
-  cons: [number, number, number];
+  cons: [number, number, number, number, number, number];
   bossName: string | null;
   bossHp: number;
   bossMax: number;
@@ -159,7 +161,7 @@ export class PeakCommandoGame {
   private crouching = false;
   private sprinting = false;
   private weapon: WeaponDef | null = null;
-  private cons: [number, number, number] = [1, 0, 0];
+  private cons: [number, number, number, number, number, number] = [1, 0, 0, 0, 0, 0];
   private attackCd = 0;
   private swingT = 0;
   private invulnT = 0;
@@ -274,7 +276,7 @@ export class PeakCommandoGame {
     this.timeDirector.start();
     this.timeLeft = Math.round(this.timeDirector.time);
     this.pHp = 100; this.stam = 100;
-    this.weapon = null; this.cons = [1, 0, 0];
+    this.weapon = null; this.cons = [1, 0, 0, 0, 0, 0];
     this.adrenalineT = 0; this.pDead = false; this.deathLine = "";
     this.carried = null; this.revivePct = 0;
     this.eraIdx = 0;
@@ -338,6 +340,10 @@ export class PeakCommandoGame {
     if (e.code === "Digit1") this.useConsumable(0);
     if (e.code === "Digit2") this.useConsumable(1);
     if (e.code === "Digit3") this.useConsumable(2);
+    if (e.code === "Digit4") this.useConsumable(3);
+    if (e.code === "Digit5") this.useConsumable(4);
+    if (e.code === "Digit6") this.useConsumable(5);
+    if (e.code === "KeyQ") this.cycleWeapon();
     if (e.code === "Escape") this.pause();
     // --- cheats de prototipo (para revisar el contenido) ---
     if (e.code === "KeyN") this.cheatNextEra();
@@ -773,46 +779,144 @@ export class PeakCommandoGame {
     const wallColor = era.propStyle === "future" ? 0x1a2438 : era.propStyle === "west" ? 0x8a5a33 : era.propStyle === "medieval" ? 0x6a6f78 : era.propStyle === "modern" ? 0x6f756c : 0x5d4a33;
     const diffColor = tier === 0 ? 0x6fae4e : tier === 1 ? 0xffb02e : tier === 3 ? 0xff3bd4 : 0xff4438;
 
-    if (type === "arena") {
-      this.wallRect(x, z, 10, 10, 1.5, th, wallColor, 1);
-      this.banner(x - 5.6, th, z + 5.6, era.accent, diffColor);
-      this.buildChestAt(x + 3.4, z - 3.4, 0);
-      this.addFrag(x - 3.5, 0, z + 3.5);
-      for (let k = 0; k < 2; k++) this.spawnEnemy(era, "normal", x + (rng() - 0.5) * 5, z + (rng() - 0.5) * 5, new THREE.Vector3(x, 0, z));
-    } else if (type === "stealth") {
-      this.wallRect(x, z, 8.4, 8.4, 3, th, wallColor, 3);
-      this.banner(x - 5, th, z - 5, era.accent, diffColor);
-      this.buildChestAt(x + 2.9, z + 2.9, 0);
-      this.addFrag(x + 3, 0, z - 3);
-      this.addFrag(x - 1, 0, z + 3.2);
-      this.spawnEnemy(era, "brute", x - 0.5, z - 0.5, new THREE.Vector3(x, 0, z));
-      this.box(1.1, 0.5, 1.1, 0x4a3f2a, x - 3, th + 0.25, z + 2.5, { collide: false });
-    } else if (type === "treasure") {
-      // Cámara legendaria: sin desafío, puro botín
-      this.wallRect(x, z, 8.4, 8.4, 2.4, th, wallColor, 0);
-      this.banner(x - 5, th, z - 5, 0xff3bd4, 0xff3bd4);
-      this.buildChestAt(x - 2.4, z + 2.2, 0);
-      this.buildChestAt(x + 2.4, z + 2.2, 0);
-      this.buildChestAt(x, z - 2.2, 0);
-      this.addFrag(x, 0, z + 0.4);
-      this.addFrag(x - 2.4, 0, z - 0.6);
-      this.addFrag(x + 2.4, 0, z - 0.6);
-      this.box(1.4, 0.35, 1.4, 0xffd76a, x, th + 0.18, z, { collide: false, emissive: 0.6 });
-    } else {
-      this.wallRect(x, z, 13, 10.5, 2.7, th, wallColor, 2);
-      this.banner(x - 7.2, th, z - 5.8, era.accent, diffColor);
-      const tx = x + 3.2, tz = z - 2.2;
-      this.box(4, 2.7, 4, wallColor, tx, th + 1.35, tz);
-      this.box(4.4, 0.35, 4.4, diffColor, tx, th + 2.88, tz, { collide: false });
-      for (let s = 0; s < 4; s++) {
-        const top = 0.68 * (4 - s);
-        this.box(1.15, top, 1.15, wallColor, tx, th + top / 2, tz + 2.1 + s * 1.05, { collide: true });
+    // Determinar número de habitaciones según tipo y dificultad
+    let numRooms = 2 + Math.floor(rng() * 2); // 2-3 por defecto
+    if (type === "fortress") numRooms = 3 + Math.floor(rng() * 2); // 3-4
+    if (type === "treasure") numRooms = 2;
+    if (tier >= 2) numRooms = Math.min(4, numRooms + 1); // Más difícil = más habitaciones
+
+    // Generar layout de mazmorra multi-habitación
+    const archetypeMapInv: Record<"arena" | "stealth" | "fortress" | "treasure", string> = {
+      arena: "exterminio",
+      stealth: "sigilo",
+      fortress: "fortaleza",
+      treasure: "legendaria",
+    };
+    
+    const difficultyMapInv: Record<number, string> = { 0: "easy", 1: "medium", 2: "hard", 3: "hard" };
+    
+    const layout = generateDungeonLayout(
+      numRooms,
+      x,
+      z,
+      archetypeMapInv[type] as any,
+      difficultyMapInv[tier] as any,
+      rng
+    );
+
+    // Construir cada habitación
+    for (let i = 0; i < layout.rooms.length; i++) {
+      const room = layout.rooms[i];
+      const isFirst = i === 0;
+      const isLast = i === layout.rooms.length - 1;
+      
+      // Altura de paredes según tipo de habitación
+      let wallHeight = 2.5;
+      if (room.type === 'main') wallHeight = 3.5;
+      if (room.type === 'treasure') wallHeight = 3.0;
+      
+      // Determinar lados con apertura (conexiones entre habitaciones)
+      let gapSide = -1; // Sin apertura por defecto
+      
+      // Buscar conexiones desde esta habitación
+      for (const conn of layout.connections) {
+        if (conn.from === i) {
+          // Conexión hacia adelante: abrir lado norte/este
+          const nextRoom = layout.rooms[conn.to];
+          if (nextRoom.z > room.z) gapSide = 0; // Norte
+          else if (nextRoom.x > room.x) gapSide = 1; // Este
+          else if (nextRoom.z < room.z) gapSide = 2; // Sur
+          else if (nextRoom.x < room.x) gapSide = 3; // Oeste
+        }
+        if (conn.to === i) {
+          // Conexión desde atrás: abrir lado correspondiente
+          const prevRoom = layout.rooms[conn.from];
+          if (prevRoom.z < room.z) gapSide = 0; // Norte
+          else if (prevRoom.x < room.x) gapSide = 1; // Este
+          else if (prevRoom.z > room.z) gapSide = 2; // Sur
+          else if (prevRoom.x > room.x) gapSide = 3; // Oeste
+        }
       }
-      this.buildChestAt(tx, tz, 2.7);
-      this.addFrag(tx - 1.2, 2.7, tz + 1.2);
-      this.spawnEnemy(era, "normal", x - 3.5, z + 1.5, new THREE.Vector3(x, 0, z));
-      this.spawnEnemy(era, "normal", x + 0.5, z + 3.2, new THREE.Vector3(x, 0, z));
-      this.spawnEnemy(era, rng() > 0.5 ? "normal" : "normal", x - 4.5, z - 3, new THREE.Vector3(x, 0, z));
+      
+      // Construir paredes de la habitación
+      this.wallRect(room.x, room.z, room.width, room.depth, wallHeight, th, wallColor, gapSide);
+      
+      // Añadir banner en la entrada
+      if (isFirst) {
+        this.banner(room.x - room.width * 0.4, th, room.z - room.depth * 0.4, era.accent, diffColor);
+      }
+      
+      // Contenido según tipo de habitación
+      if (room.type === 'main' || room.type === 'treasure') {
+        // Habitación principal: cofre y enemigos
+        this.buildChestAt(room.x + room.width * 0.25, room.z + room.depth * 0.25, th);
+        
+        // Spawn de enemigos (más en habitaciones principales)
+        const numEnemies = room.type === 'treasure' ? 1 : 2 + Math.floor(rng() * 2);
+        for (let e = 0; e < numEnemies; e++) {
+          const enemyType = tier >= 2 && rng() > 0.6 ? "brute" : "normal";
+          this.spawnEnemy(
+            era,
+            enemyType,
+            room.x + (rng() - 0.5) * room.width * 0.6,
+            room.z + (rng() - 0.5) * room.depth * 0.6,
+            new THREE.Vector3(x, 0, z)
+          );
+        }
+      } else if (room.type === 'corridor') {
+        // Habitaciones de paso: algunos enemigos y fragmentos
+        if (rng() > 0.4) {
+          this.addFrag(room.x + (rng() - 0.5) * room.width * 0.3, th, room.z + (rng() - 0.5) * room.depth * 0.3);
+        }
+        if (rng() > 0.5) {
+          this.spawnEnemy(era, "normal", room.x + (rng() - 0.5) * room.width * 0.4, room.z + (rng() - 0.5) * room.depth * 0.4, new THREE.Vector3(x, 0, z));
+        }
+      }
+      
+      // Decoración según tipo de mazmorra
+      if (type === "fortress" && room.type !== 'entrance') {
+        // Torres defensivas en fortalezas
+        const towerSize = 2.5;
+        const towerX = room.x + (room.width * 0.35) * (rng() > 0.5 ? 1 : -1);
+        const towerZ = room.z + (room.depth * 0.35) * (rng() > 0.5 ? 1 : -1);
+        this.box(towerSize, 4, towerSize, wallColor, towerX, th + 2, towerZ);
+      }
+      
+      if (type === "stealth" && room.type === 'corridor') {
+        // Cubiertas/obstáculos en mazmorras de sigilo
+        const coverW = 2.5, coverD = 1.2, coverH = 1.4;
+        this.box(coverW, coverH, coverD, 0x4a3f2a, room.x, th + coverH / 2, room.z + (rng() - 0.5) * room.depth * 0.3, { collide: true });
+      }
+    }
+    
+    // Tesoros adicionales según tipo
+    if (type === "treasure") {
+      // Mazmorra legendaria: múltiples cofres
+      const treasures = getTreasurePositions(layout);
+      for (const t of treasures) {
+        this.buildChestAt(t.x, t.z, th);
+      }
+      // Fragmentos extra
+      for (let k = 0; k < 3; k++) {
+        const room = layout.rooms[1 + Math.floor(rng() * (layout.rooms.length - 1))];
+        this.addFrag(room.x + (rng() - 0.5) * room.width * 0.4, th, room.z + (rng() - 0.5) * room.depth * 0.4);
+      }
+    } else if (type === "arena") {
+      // Arena: cofre final en última habitación
+      const lastRoom = layout.rooms[layout.rooms.length - 1];
+      this.buildChestAt(lastRoom.x + lastRoom.width * 0.25, lastRoom.z + lastRoom.depth * 0.25, th);
+      this.addFrag(lastRoom.x - lastRoom.width * 0.25, th, lastRoom.z + lastRoom.depth * 0.25);
+    } else if (type === "stealth") {
+      // Sigilo: cofre y fragmentos en última habitación
+      const lastRoom = layout.rooms[layout.rooms.length - 1];
+      this.buildChestAt(lastRoom.x, lastRoom.z, th);
+      this.addFrag(lastRoom.x + lastRoom.width * 0.3, th, lastRoom.z - lastRoom.depth * 0.3);
+      this.addFrag(lastRoom.x - lastRoom.width * 0.3, th, lastRoom.z + lastRoom.depth * 0.3);
+    } else {
+      // Fortress: cofre en habitación final
+      const lastRoom = layout.rooms[layout.rooms.length - 1];
+      this.buildChestAt(lastRoom.x, lastRoom.z + lastRoom.depth * 0.2, th);
+      this.addFrag(lastRoom.x - lastRoom.width * 0.2, th, lastRoom.z + lastRoom.depth * 0.3);
     }
   }
 
@@ -1139,6 +1243,33 @@ export class PeakCommandoGame {
     }
   }
 
+  private cycleWeapon() {
+    // Ciclo entre armas disponibles (para prototipo)
+    const weapons = this.era.weapons;
+    if (!weapons || weapons.length === 0) return;
+    
+    const currentIndex = this.weapon ? weapons.findIndex(w => w.name === this.weapon?.name) : -1;
+    const nextIndex = (currentIndex + 1) % weapons.length;
+    this.weapon = weapons[nextIndex];
+    
+    // Remover arma visual anterior
+    if (this.weaponMesh) {
+      this.weaponGroup.remove(this.weaponMesh);
+      this.weaponMesh = null;
+    }
+    
+    // Crear nueva arma visual
+    this.weaponMesh = new THREE.Mesh(
+      new THREE.BoxGeometry(0.15, 0.15, 0.6),
+      new THREE.MeshLambertMaterial({ color: this.era.accent })
+    );
+    this.weaponMesh.position.set(0.25, -0.25, -0.5);
+    this.weaponGroup.add(this.weaponMesh);
+    
+    this.feed(`Arma cambiada: ${this.weapon.name}`, "info");
+    sfx.ui();
+  }
+
   private useConsumable(i: number) {
     if (this.pDead || this.cons[i] <= 0) return;
     this.cons[i]--;
@@ -1164,10 +1295,33 @@ export class PeakCommandoGame {
       });
       sfx.stink();
       this.feed("Granada fétida lanzada. Huele a decisión cuestionable.", "fun");
-    } else {
+    } else if (i === 2) {
       this.adrenalineT = 6;
       this.feed("ADRENALINA: +50% velocidad durante 6 s. ¡ZASCA!", "good");
       sfx.pickup();
+    } else if (i === 3) {
+      this.pHp = Math.min(100, this.pHp + 40);
+      this.feed("Vendaje aplicado. La carne suspira de alivio.", "good");
+      sfx.revive();
+    } else if (i === 4) {
+      this.stam = Math.min(GAME_CONFIG.movement.staminaMax, this.stam + 80);
+      this.feed("Bebida energética: piernas de acero (+80 stamina).", "good");
+      sfx.pickup();
+    } else if (i === 5) {
+      const p = this.pPos.clone().addScaledVector(this.forward(), 2.5);
+      p.y = Math.max(this.terrainAt(p.x, p.z), this.pPos.y) + 0.8;
+      const mesh = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.4, 0.4), new THREE.MeshLambertMaterial({ color: 0xff4444 }));
+      mesh.position.copy(p);
+      this.worldGroup.add(mesh);
+      this.stinks.push({
+        mesh, cloud: null, pos: p,
+        vel: this.forward().multiplyScalar(12).setY(6),
+        t: 0, landed: false,
+      });
+      sfx.stink();
+      this.feed("Explosivo lanzado. Corre si puedes.", "bad");
+    } else {
+      this.feed("Slot vacío. ¿Esperabas magia?", "info");
     }
     this.pushHud();
   }
@@ -1846,7 +2000,7 @@ export class PeakCommandoGame {
       compHp: this.cHp,
       compDown: this.cDown,
       weapon: this.weapon ? this.weapon.name : "Puños de comando",
-      cons: [...this.cons] as [number, number, number],
+      cons: [...this.cons] as [number, number, number, number, number, number],
       bossName: boss ? boss.def.name : null,
       bossHp: boss ? Math.max(0, boss.hp) : 0,
       bossMax: boss ? boss.maxHp : 1,

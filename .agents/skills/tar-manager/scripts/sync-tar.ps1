@@ -46,10 +46,11 @@ try {
         if ($relPath -eq '.gitignore') {
             $rawLines = Get-Content -Path $file.FullName
             $cleaned = @()
+            $forbiddenPatterns = @('*.js', '*.ts', '*.tsx', '*.jsx', '*.css', '*.scss', '*.sass', '*.less')
             foreach ($line in $rawLines) {
                 $trimmed = $line.Trim()
                 if ($trimmed.StartsWith('```')) { continue }
-                if ($trimmed -eq '*.js') { continue }
+                if ($forbiddenPatterns -contains $trimmed) { continue }
                 $cleaned += $line
             }
             $essentials = @('node_modules/', 'dist/', 'build/', '.env', '.env.local', '*.log')
